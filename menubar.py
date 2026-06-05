@@ -54,14 +54,21 @@ def run_report(script: str, date_arg: str = "") -> None:
     '''])
 
 def discover_tools():
-    """自動偵測資料夾內有 # TOOL: 標記的 .py 腳本"""
+    """自動偵測資料夾內的工具腳本。
+    # TOOL:      → 報表類（自動／指定區間）
+    # TOOL_APP:  → 應用類（單一點擊啟動，例如網頁 server）
+    回傳 (kind, name, path)；kind 為 'report' 或 'app'
+    """
     tools = []
     for f in sorted(BASE_DIR.glob("*.py")):
         if f.name == "menubar.py": continue
         with open(f, encoding="utf-8", errors="ignore") as fh:
             for line in fh:
+                if line.startswith("# TOOL_APP:"):
+                    tools.append(("app", line[len("# TOOL_APP:"):].strip(), str(f)))
+                    break
                 if line.startswith("# TOOL:"):
-                    tools.append((line[7:].strip(), str(f)))
+                    tools.append(("report", line[7:].strip(), str(f)))
                     break
     return tools
 
@@ -76,7 +83,14 @@ class DailyTrackerApp(rumps.App):
         tools = discover_tools()
         items = []
 
-        for tool_name, script_path in tools:
+        for kind, tool_name, script_path in tools:
+            # 應用類（網頁 server 等）：單一點擊啟動，不顯示自動/指定區間
+            if kind == "app":
+                items.append(rumps.MenuItem(tool_name,
+                                            callback=lambda _, s=script_path: run_report(s)))
+                continue
+
+            # 報表類：自動 / 指定區間
             # 從工具名稱推測輸出子目錄（北一區 or 北二區）
             subdir = "北二區" if "北二區" in tool_name else ("北一區" if "北一區" in tool_name else "")
             pattern = "保固搭售率北二區_*.xlsx" if "北二區" in tool_name else "保固搭售率_*.xlsx"
