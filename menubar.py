@@ -3,9 +3,10 @@
 每日追蹤主機項目 — macOS 選單列
 右上角圖示點一下 → 選擇報表執行
 """
-import subprocess, glob, os, rumps
+import subprocess, glob, os, sys, rumps
 from datetime import date, timedelta
 from pathlib import Path
+import threading
 
 BASE_DIR = Path(__file__).parent
 OUT_DIR  = Path("~/daily-tracker-output").expanduser()
@@ -90,12 +91,34 @@ class DailyTrackerApp(rumps.App):
                                     callback=lambda _, s=script_path, n=tool_name: self._custom(s, n)))
             items.append(item)
 
-        self.menu = items + [None, rumps.MenuItem("結束", callback=lambda _: rumps.quit_application())]
+        self.menu = items + [
+            None,
+            rumps.MenuItem("🔄  更新工具", callback=self._update),
+            None,
+            rumps.MenuItem("結束", callback=lambda _: rumps.quit_application()),
+        ]
 
     def _custom(self, script_path, tool_name):
         result = ask_date_range(tool_name)
         if result:
             run_report(script_path, f"{result[0]} {result[1]}")
+
+    def _update(self, _):
+        rumps.notification("每日追蹤工具", "", "更新中，請稍候…", sound=False)
+        def do_update():
+            try:
+                subprocess.run(["git", "-C", str(BASE_DIR), "pull", "--rebase"],
+                               capture_output=True, check=True)
+                subprocess.run([sys.executable, "-m", "pip", "install", "-r",
+                                str(BASE_DIR / "requirements.txt"), "-q"],
+                               capture_output=True, check=True)
+                rumps.notification("每日追蹤工具", "", "更新完成！重新啟動選單中…", sound=False)
+                # 重新啟動自己
+                subprocess.Popen([sys.executable, str(BASE_DIR / "menubar.py")])
+                rumps.quit_application()
+            except subprocess.CalledProcessError as e:
+                rumps.notification("每日追蹤工具", "更新失敗", str(e), sound=False)
+        threading.Thread(target=do_update, daemon=True).start()
 
     @rumps.clicked("結束")
     def quit(self, _):
