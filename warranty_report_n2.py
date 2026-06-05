@@ -69,10 +69,12 @@ def query_period(d_start, d_end):
     cond = f"l.doc_date>={ds} AND l.doc_date<={de} AND l.trans_type IN ('A','E','H')"
 
     def net_sql(where):
+        # 排除認證機（類別2=2029）
         return (f"SELECT l.shop_id, SUM(CASE WHEN l.trans_type IN ('A','H') THEN l.stk_qty "
                 f"WHEN l.trans_type='E' THEN l.stk_qty ELSE 0 END) AS units "
                 f"FROM poslinev_bi l WHERE l.org_id='01' AND l.shop_id IN ({SHOP_IN}) "
-                f"AND {cond} AND {where} GROUP BY l.shop_id ORDER BY l.shop_id")
+                f"AND {cond} AND l.cat2_id<>'2029' AND {where} "
+                f"GROUP BY l.shop_id ORDER BY l.shop_id")
 
     def to_map(rows):
         return {str(int(r['SHOP_ID'])): int(float(r.get('UNITS', 0) or 0)) for r in rows}
@@ -146,6 +148,70 @@ def query_extras(d_start, d_end):
     return {store: {'arpedia': arp.get(str(int(SHOP_CODES[store])), 0),
                     'speaker': spk.get(str(int(SHOP_CODES[store])), 0)}
             for store in STORES}
+
+EDU_CATS = [
+    ('mac',   'Mac',   '2E75B6', 'BDD7EE'),
+    ('ipad',  'iPad',  '375623', 'E2EFDA'),
+    ('watch', 'Watch', 'A50021', 'FFCCCC'),
+]
+EDU_EXCL = {'花蓮', '板橋誠品', '永和'}  # 不計算教育價佔比的門市
+
+def query_edu_units(d_start, d_end):
+    """教育價主機台數：同一單據含 SKU 99200202/99200203，且排除認證機(cat2≠2029)
+    兩步驟：先取含教育SKU的單據清單，再 Python 端過濾主機台數。
+    """
+    ds = f"TO_DATE('{d_start}','yyyy-mm-dd')"
+    de = f"TO_DATE('{d_end}','yyyy-mm-dd')"
+
+    # Step 1: 取含教育價 SKU 的 (shop_id, doc_id) 清單
+    edu_rows = epb(
+        f"SELECT DISTINCT l.shop_id, l.doc_id "
+        f"FROM poslinev_bi l "
+        f"WHERE l.org_id='01' AND l.shop_id IN ({SHOP_IN}) "
+        f"AND l.doc_date>={ds} AND l.doc_date<={de} "
+        f"AND l.stk_id IN ('99200202','99200203')",
+        max_rows=10000
+    )
+    edu_pairs = set()
+    for r in edu_rows:
+        try:
+            edu_pairs.add((str(int(r['SHOP_ID'].strip())), r['DOC_ID'].strip()))
+        except (ValueError, KeyError):
+            pass
+
+    if not edu_pairs:
+        return {'mac': {}, 'ipad': {}, 'watch': {}}
+
+    # Step 2: 查各品類的 (shop_id, doc_id, units)，Python 端過濾
+    def count_edu(cat_where):
+        rows = epb(
+            f"SELECT l.shop_id, l.doc_id, "
+            f"SUM(CASE WHEN l.trans_type IN ('A','H') THEN l.stk_qty "
+            f"WHEN l.trans_type='E' THEN l.stk_qty ELSE 0 END) AS units "
+            f"FROM poslinev_bi l "
+            f"WHERE l.org_id='01' AND l.shop_id IN ({SHOP_IN}) "
+            f"AND l.doc_date>={ds} AND l.doc_date<={de} "
+            f"AND l.trans_type IN ('A','E','H') "
+            f"AND l.cat2_id<>'2029' AND {cat_where} "
+            f"GROUP BY l.shop_id, l.doc_id ORDER BY l.shop_id",
+            max_rows=10000
+        )
+        result = defaultdict(int)
+        for r in rows:
+            try:
+                sid = str(int(r['SHOP_ID'].strip()))
+            except (ValueError, KeyError):
+                continue
+            did = r['DOC_ID'].strip()
+            if (sid, did) in edu_pairs:
+                result[sid] += int(float(r.get('UNITS', 0) or 0))
+        return dict(result)
+
+    return {
+        'mac':   count_edu("l.cat4_id IN ('4001','4002')"),
+        'ipad':  count_edu("l.cat4_id IN ('4005','4006','4041')"),
+        'watch': count_edu("l.cat4_id='4038'"),
+    }
 
 # ── Mysetup 信件掃描 ──────────────────────────────────────────────────────────
 def _decode_mail_str(s):
@@ -246,7 +312,7 @@ def write_table(ws, start_row, title, data, extras=None, mysetup=None):
 
     ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=total_cols)
     sc(ws, start_row, 1, title, bg='1F3864', fg='FFFFFF', bold=True, sz=12)
-    ws.row_dimensions[start_row].height = 28
+    ws.row_dimensions[start_row].height = 40
 
     r2 = start_row + 1
     sc(ws, r2, 1, '門市', bg='404040', fg='FFFFFF', bold=True)
@@ -340,6 +406,74 @@ def write_table(ws, start_row, title, data, extras=None, mysetup=None):
 
     return r_tot + 2
 
+def write_edu_table(ws, start_row, title, edu_data, host_data):
+    total_cols = 1 + len(EDU_CATS) * 3
+
+    ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=total_cols)
+    sc(ws, start_row, 1, title, bg='1F3864', fg='FFFFFF', bold=True, sz=12)
+    ws.row_dimensions[start_row].height = 28
+
+    r2 = start_row + 1
+    sc(ws, r2, 1, '門市', bg='404040', fg='FFFFFF', bold=True)
+    ws.row_dimensions[r2].height = 22
+    col = 2
+    for cat, label, hbg, sbg in EDU_CATS:
+        ws.merge_cells(start_row=r2, start_column=col, end_row=r2, end_column=col + 2)
+        sc(ws, r2, col, label, bg=hbg, fg='FFFFFF', bold=True)
+        col += 3
+
+    r3 = start_row + 2
+    sc(ws, r3, 1, '', bg='595959')
+    ws.row_dimensions[r3].height = 28
+    col = 2
+    for cat, label, hbg, sbg in EDU_CATS:
+        sc(ws, r3, col,     '教育台數', bg=sbg, bold=True, sz=9)
+        sc(ws, r3, col + 1, '總台數',   bg=sbg, bold=True, sz=9)
+        sc(ws, r3, col + 2, '教育佔比', bg=sbg, bold=True, sz=9)
+        col += 3
+
+    for i, store in enumerate(STORES):
+        r  = start_row + 3 + i
+        bg = 'FFFFFF' if i % 2 == 0 else 'F5F5F5'
+        ws.row_dimensions[r].height = 20
+        sc(ws, r, 1, store, bg=bg, bold=True)
+        col = 2
+        if store in EDU_EXCL:
+            for _ in EDU_CATS:
+                sc(ws, r, col,     '—', bg=bg, fg='AAAAAA')
+                sc(ws, r, col + 1, '—', bg=bg, fg='AAAAAA')
+                sc(ws, r, col + 2, '—', bg=bg, fg='AAAAAA')
+                col += 3
+        else:
+            sid = str(int(SHOP_CODES[store]))
+            for cat, *_ in EDU_CATS:
+                edu_u = edu_data[cat].get(sid, 0)
+                tot_u = host_data[store][cat][0]
+                pct   = edu_u / tot_u * 100 if tot_u > 0 else None
+                ps    = f'{pct:.0f}%' if pct is not None else '—'
+                sc(ws, r, col,     edu_u if edu_u > 0 else 0, bg=bg)
+                sc(ws, r, col + 1, tot_u if tot_u > 0 else 0, bg=bg)
+                sc(ws, r, col + 2, ps, bg=bg, bold=True)
+                col += 3
+
+    incl = [s for s in STORES if s not in EDU_EXCL]
+    r_tot = start_row + 3 + len(STORES)
+    ws.row_dimensions[r_tot].height = 22
+    sc(ws, r_tot, 1, '合計', bg='404040', fg='FFFFFF', bold=True)
+    col = 2
+    for cat, *_ in EDU_CATS:
+        t_edu = sum(edu_data[cat].get(str(int(SHOP_CODES[s])), 0) for s in incl)
+        t_tot = sum(host_data[s][cat][0] for s in incl)
+        pct   = t_edu / t_tot * 100 if t_tot > 0 else None
+        ps    = f'{pct:.0f}%' if pct is not None else '—'
+        sc(ws, r_tot, col,     t_edu, bg='D9D9D9', bold=True)
+        sc(ws, r_tot, col + 1, t_tot, bg='D9D9D9', bold=True)
+        sc(ws, r_tot, col + 2, ps,    bg='D9D9D9', bold=True)
+        col += 3
+
+    return r_tot + 2
+
+
 def set_col_widths(ws):
     ws.column_dimensions['A'].width = 7
     col = 2
@@ -368,28 +502,44 @@ def main():
     print(f"區間：{d_start.strftime('%-m/%-d')} ～ {d_end.strftime('%-m/%-d')}")
     print(f"月累積：{m_start.strftime('%-m/%-d')} ～ {d_end.strftime('%-m/%-d')}")
 
-    print("查詢區間資料... (1/4)", flush=True)
+    print("查詢區間資料... (1/5)", flush=True)
     data_range = query_period(d_start, d_end)
-    print("查詢月累積資料... (2/4)", flush=True)
+    print("查詢月累積資料... (2/5)", flush=True)
     data_month = query_period(m_start, d_end)
-    print("查詢 ARpedia/喇叭資料... (3/4)", flush=True)
+    print("查詢 ARpedia/喇叭資料... (3/5)", flush=True)
     extras_range = query_extras(d_start, d_end)
     extras_month = query_extras(m_start, d_end)
-    print("掃描 Mysetup 信件... (4/4)", flush=True)
+    print("掃描 Mysetup 信件... (4/5)", flush=True)
     mysetup_range = query_mysetup(d_start, d_end)
     mysetup_month = query_mysetup(m_start, d_end)
     print(f"  找到門市：{', '.join(sorted(mysetup_range)) or '（無）'}")
+    print("查詢教育價台數... (5/5)", flush=True)
+    edu_range = query_edu_units(d_start, d_end)
+    edu_month = query_edu_units(m_start, d_end)
 
     wb = Workbook()
     ws = wb.active
     ws.title = '每日追蹤主機項目'
     ws.freeze_panes = 'B4'
 
-    rt = f"區間  {d_start.strftime('%-m/%-d')} ～ {d_end.strftime('%-m/%-d')}  各門市保固搭售率（北一區）"
-    mt = f"月累積  {m_start.strftime('%-m/%d').lstrip('0')} ～ {d_end.strftime('%-m/%-d')}  各門市保固搭售率（北一區）"
+    NOTE = '※ 主機台數已排除認證機（類別2=2029）'
+    rt = (f"區間  {d_start.strftime('%-m/%-d')} ～ {d_end.strftime('%-m/%-d')}  "
+          f"各門市保固搭售率（北二區）\n{NOTE}")
+    mt = (f"月累積  {m_start.strftime('%-m/%d').lstrip('0')} ～ {d_end.strftime('%-m/%-d')}  "
+          f"各門市保固搭售率（北二區）\n{NOTE}")
     next_row = write_table(ws, 1, rt, data_range, extras_range, mysetup_range)
     write_table(ws, next_row, mt, data_month, extras_month, mysetup_month)
     set_col_widths(ws)
+
+    ws2 = wb.create_sheet('教育價佔比')
+    ws2.freeze_panes = 'B4'
+    rt2 = f"區間  {d_start.strftime('%-m/%-d')} ～ {d_end.strftime('%-m/%-d')}  教育價佔比（北二區）"
+    mt2 = f"月累積  {m_start.strftime('%-m/%d').lstrip('0')} ～ {d_end.strftime('%-m/%-d')}  教育價佔比（北二區）"
+    next_row2 = write_edu_table(ws2, 1, rt2, edu_range, data_range)
+    write_edu_table(ws2, next_row2, mt2, edu_month, data_month)
+    ws2.column_dimensions['A'].width = 9
+    for i in range(len(EDU_CATS) * 3):
+        ws2.column_dimensions[get_column_letter(2 + i)].width = 9
 
     out_dir = OUTPUT_BASE / '北二區'
     out_dir.mkdir(parents=True, exist_ok=True)
