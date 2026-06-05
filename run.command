@@ -1,14 +1,8 @@
 #!/bin/bash
-# 每日追蹤主機項目 — 啟動器
-# 雙擊此檔案即可選擇要執行的報表
+# 每日追蹤主機項目 — 啟動器（雙擊執行）
 cd "$(dirname "$0")"
 
-echo "======================================"
-echo "  每日追蹤主機項目"
-echo "======================================"
-echo ""
-
-# 自動偵測可執行的工具（以 # TOOL: 開頭的行作為顯示名稱）
+# 收集所有工具（# TOOL: 開頭）
 declare -a FILES
 declare -a NAMES
 while IFS= read -r -d '' f; do
@@ -20,40 +14,50 @@ while IFS= read -r -d '' f; do
 done < <(find . -maxdepth 1 -name "*.py" -print0 | sort -z)
 
 if [ ${#FILES[@]} -eq 0 ]; then
-    echo "找不到可執行的工具"
-    read -p "按 Enter 關閉..."
+    osascript -e 'display alert "找不到可執行的工具" message "請確認資料夾內有 .py 工具檔案"'
     exit 1
 fi
 
-# 顯示選單
-for i in "${!NAMES[@]}"; do
-    echo "  $((i+1)). ${NAMES[$i]}"
+# 組成 AppleScript list 字串
+LIST=""
+for name in "${NAMES[@]}"; do
+    LIST="${LIST}\"${name}\", "
 done
+LIST="${LIST%,*}"  # 移除最後一個逗號
+
+# 跳出點選視窗
+CHOICE=$(osascript <<EOF
+choose from list {$LIST} with title "每日追蹤主機項目" with prompt "請選擇要執行的報表：" OK button name "執行" cancel button name "取消"
+EOF
+)
+
+[ "$CHOICE" = "false" ] && exit 0
+
+# 找到對應腳本
+SCRIPT=""
+for i in "${!NAMES[@]}"; do
+    if [ "${NAMES[$i]}" = "$CHOICE" ]; then
+        SCRIPT="${FILES[$i]}"
+        break
+    fi
+done
+
+# 詢問日期（可留空）
+DATERANGE=$(osascript <<EOF
+set d to text returned of (display dialog "輸入日期區間（留空 = 自動最近完整週）" default answer "" with title "$CHOICE" buttons {"取消", "執行"} default button "執行")
+return d
+EOF
+)
+
+[ $? -ne 0 ] && exit 0
+
+echo "▶ 執行：$CHOICE"
 echo ""
-read -p "請選擇（輸入數字）: " choice
 
-if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#FILES[@]} ]; then
-    echo "無效的選擇"
-    read -p "按 Enter 關閉..."
-    exit 1
-fi
-
-SCRIPT="${FILES[$((choice-1))]}"
-TOOL_NAME="${NAMES[$((choice-1))]}"
-
-echo ""
-echo "▶ 執行：$TOOL_NAME"
-echo ""
-
-# 詢問日期區間
-read -p "日期區間（直接 Enter = 自動最近完整週，或輸入如 5/31 6/4）: " daterange
-
-echo ""
-if [ -z "$daterange" ]; then
+if [ -z "$DATERANGE" ]; then
     python3 "$SCRIPT"
 else
-    python3 "$SCRIPT" $daterange
+    python3 "$SCRIPT" $DATERANGE
 fi
 
-echo ""
 read -p "按 Enter 關閉..."
