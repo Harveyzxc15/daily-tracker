@@ -29,14 +29,13 @@ else
 fi
 echo ""
 
-# 3. 確認 EPB App 資料夾
-EPB_DIR="$HOME/Desktop/北一區週報-app"
-echo "▶ 確認 EPB App 資料夾..."
-if [ -d "$EPB_DIR" ]; then
-    echo "  ✅ EPB App 資料夾已就緒"
+# 3. 確認 EPBrowser（EPB 連線 lib，公司內部程式）
+echo "▶ 確認 EPBrowser..."
+if [ -f "/Library/EPBrowser/EPB/Shell/shell.jar" ]; then
+    echo "  ✅ EPBrowser 已就緒（EPB 橋接由本工具自動編譯，不需另放資料夾）"
 else
-    echo "  ⚠️  找不到 EPB App 資料夾（$EPB_DIR）"
-    echo "     請將資料夾放到桌面，或修改 config.py 的 EPB_APP_DIR"
+    echo "  ⚠️  找不到 EPBrowser（/Library/EPBrowser）"
+    echo "     EPB 查詢需要公司的 EPBrowser 程式，請先安裝"
 fi
 echo ""
 
