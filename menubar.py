@@ -3,7 +3,7 @@
 每日追蹤主機項目 — macOS 選單列
 右上角圖示點一下 → 選擇報表執行
 """
-import subprocess, glob, os, sys, rumps
+import subprocess, glob, os, sys, rumps, tempfile, stat
 from datetime import date, timedelta
 from pathlib import Path
 import threading
@@ -43,15 +43,15 @@ def ask_date_range(title: str):
     return None
 
 def run_report(script: str, date_arg: str = "") -> None:
+    # 用暫存 .command + open 開 Terminal 執行（不需「自動化」權限，比 AppleScript 控制 Terminal 穩）
     cmd = f'cd "{BASE_DIR}" && python3 "{script}"'
     if date_arg:
         cmd += f" {date_arg}"
-    subprocess.run(["osascript", "-e", f'''
-    tell application "Terminal"
-        activate
-        do script "{cmd}"
-    end tell
-    '''])
+    fd, path = tempfile.mkstemp(suffix=".command", prefix="tool_")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(f"#!/bin/bash\n{cmd}\n")
+    os.chmod(path, 0o755)
+    subprocess.run(["open", "-a", "Terminal", path])
 
 def discover_tools():
     """自動偵測資料夾內的工具腳本。
