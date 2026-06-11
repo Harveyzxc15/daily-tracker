@@ -56,7 +56,7 @@ REGIONS = {
 # (key, 顯示名, header色, sub色, 目標%)
 CATS = [
     ('mac',     'Mac',     '2E75B6', 'BDD7EE', 60),
-    ('iphone',  'iPhone',  'C55A11', 'FCE4D6', 26),
+    ('iphone',  'iPhone',  'C55A11', 'FCE4D6', 30),
     ('ipad',    'iPad',    '375623', 'E2EFDA', 50),
     ('watch',   'Watch',   'A50021', 'FFCCCC', 40),
     ('airpods', 'AirPods', '7030A0', 'E2CFEE', 35),
