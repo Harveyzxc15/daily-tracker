@@ -65,7 +65,16 @@ cat > "$PLIST" << PLIST_EOF
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/dailytracker_menubar.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/dailytracker_menubar.log</string>
 </dict>
 </plist>
 PLIST_EOF

@@ -55,16 +55,18 @@ def query_units(d_start: date, d_end: date) -> dict:
     return {str(int(r['SHOP_ID'])): int(float(r.get('UNITS', 0) or 0)) for r in rows}
 
 
-def query_txn_count(d_start: date, d_end: date, shop_id: str) -> int:
-    """無計數器門市：用 EPB 成交筆數估算人流"""
+def query_txn_counts(d_start: date, d_end: date) -> dict:
+    """無計數器 3 店：一次查成交筆數（估算人流），回傳 {code: cnt}"""
     ds = f"TO_DATE('{d_start}','yyyy-mm-dd')"
     de = f"TO_DATE('{d_end}','yyyy-mm-dd')"
     rows = epb(
-        f"SELECT COUNT(DISTINCT l.doc_id) AS cnt FROM poslinev_bi l "
-        f"WHERE l.org_id='01' AND l.shop_id='{shop_id}' "
-        f"AND l.doc_date>={ds} AND l.doc_date<={de} AND l.trans_type IN ('A','H')"
+        f"SELECT l.shop_id, COUNT(DISTINCT l.doc_id) AS cnt FROM poslinev_bi l "
+        f"WHERE l.org_id='01' AND l.shop_id IN ('009','025','055') "
+        f"AND l.doc_date>={ds} AND l.doc_date<={de} AND l.trans_type IN ('A','H') "
+        f"GROUP BY l.shop_id"
     )
-    return int(float(rows[0].get('CNT', 0) or 0)) if rows else 0
+    return {str(int(r['SHOP_ID'])).zfill(3): int(float(r.get('CNT', 0) or 0))
+            for r in rows}
 
 
 def traffic_formula(txn: int) -> int:
@@ -170,14 +172,13 @@ def main():
     # ── 人流（來客數）──
     print("\n【人流（來客數）】")
     tr_data = fetch_shoppertrak(tr_periods)
-    for store in STORES:                       # 無計數器 3 店：成交筆數公式
-        code = SHOP_STR[store]
-        if code in NO_COUNTER:
-            vals = []
-            for _, ds, de in tr_periods:
-                print(f"  查詢{store}成交筆數...", flush=True)
-                vals.append(traffic_formula(query_txn_count(ds, de, code)))
-            tr_data[store] = vals
+    for label, ds, de in tr_periods:           # 無計數器 3 店：每期間一次合併查詢
+        print(f"  查詢無計數器門市成交筆數 {label}...", flush=True)
+        cnts = query_txn_counts(ds, de)
+        for store in STORES:
+            code = SHOP_STR[store]
+            if code in NO_COUNTER:
+                tr_data.setdefault(store, []).append(traffic_formula(cnts.get(code, 0)))
 
     col_w2  = 16
     tr_labels = [label for label, _, _ in tr_periods]

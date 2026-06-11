@@ -91,13 +91,11 @@ class DailyTrackerApp(rumps.App):
                 continue
 
             # 報表類：自動 / 指定區間
-            # 從工具名稱推測輸出子目錄（北一區 or 北二區）
-            subdir = "北二區" if "北二區" in tool_name else ("北一區" if "北一區" in tool_name else "")
-            pattern = "保固搭售率北二區_*.xlsx" if "北二區" in tool_name else "保固搭售率_*.xlsx"
-
-            item = rumps.MenuItem(f"🛡️  {tool_name}")
-            if subdir:
-                item.add(rumps.MenuItem(f"上次執行：{last_run(pattern, subdir)}"))
+            icon = "📱" if "ARpedia" in tool_name else "🛡️"
+            item = rumps.MenuItem(f"{icon}  {tool_name}")
+            # 只有「每日追蹤主機」有輸出檔可顯示上次執行（合併版輸出在 北一北二/）
+            if "每日追蹤主機" in tool_name:
+                item.add(rumps.MenuItem(f"上次執行：{last_run('每日追蹤主機_*.xlsx', '北一北二')}"))
                 item.add(None)
             item.add(rumps.MenuItem("自動（最近完整週）",
                                     callback=lambda _, s=script_path: run_report(s)))
