@@ -200,6 +200,16 @@ def main():
     print(f"{'合計':<7}" + "".join(f"{t:>{col_w2},}" for t in tr_totals))
     print()
 
+    # ── 門市日報 本日銷售/休假人數（北二區，來自各店日報信附件）──
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from headcount_lib import print_headcount
+        print("=" * 80)
+        print_headcount('北二區')
+        print()
+    except Exception as e:
+        print(f"\n  ⚠️  門市人數統計失敗：{e}")
+
 
 if __name__ == '__main__':
     main()
