@@ -12,6 +12,7 @@ PQI點數兌換追蹤 — 北一＋北二區
 
 ★ 日期區間請改下方 START_DATE / END_DATE 兩個變數。
 """
+import sys
 import subprocess
 from datetime import date
 
@@ -22,10 +23,30 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 # ═══════════════════════════════════════════════════════════════════
-#  ★★★ 兌換查詢的日期區間（自己改這兩個）★★★
+#  ★★★ 兌換查詢的日期區間 ★★★
+#  ‧ 從選單列點「指定區間…」會用對話框輸入，蓋過下面這兩個。
+#  ‧ 直接跑腳本（沒帶參數）時，就用下面這兩個。
 START_DATE = "2026-06-01"   # 起（含）
 END_DATE   = "2026-06-20"   # 迄（含）
 # ═══════════════════════════════════════════════════════════════════
+
+
+def _norm_date(s):
+    """把 'M/D'、'YYYY/M/D'、'YYYY-M-D' 統一成 'YYYY-MM-DD'。"""
+    s = s.strip().replace("/", "-")
+    parts = s.split("-")
+    if len(parts) == 2:                       # M-D → 補今年
+        parts = [str(date.today().year)] + parts
+    y, m, d = (int(p) for p in parts)
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+# 命令列參數可覆蓋日期：python3 PQI點數兌換追蹤.py <起> <迄>
+if len(sys.argv) >= 3:
+    START_DATE = _norm_date(sys.argv[1])
+    END_DATE   = _norm_date(sys.argv[2])
+elif len(sys.argv) == 2:                       # 只給一個 → 起迄同一天
+    START_DATE = END_DATE = _norm_date(sys.argv[1])
 
 # 追蹤品項：(存貨代碼, 品名, 點數)
 ITEMS = [
