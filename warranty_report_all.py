@@ -300,15 +300,18 @@ def scan_mysetup(kw_map, lo_date, hi_date):
     for path in emlx_files:
         try:
             # 快速預篩：先讀檔頭，原始 bytes 不含關鍵字就跳過（省下對數千封非候選信的 MIME parse）
+            # 用寄件者過濾（中文標題會被 MIME 編碼，raw bytes 找不到 'Setup Data'）
             with open(path, 'rb') as f:
                 raw = f.read(32768)
-                if b'Personal Setup' not in raw or b'Setup Data' not in raw:
+                if b'guestbook_support@group.apple.com' not in raw:
                     continue
                 raw += f.read()  # 候選信才補讀完整內容（attachment 需要）
             if b'\n' not in raw: continue
             msg = _parse_emlx(raw)
             subj = _decode_mail_str(msg.get('Subject', ''))
-            if 'Personal Setup' not in subj or 'Setup Data' not in subj: continue
+            # 2026-06-29 起 Apple 改中文標題：Personal Setup ：数据 29-6月-26 - 29-6月-26
+            if 'Personal Setup' not in subj: continue
+            if 'Setup Data' not in subj and '数据' not in subj and '數據' not in subj: continue
             data_date = _subject_date(subj)
             if data_date is None or not (lo_date <= data_date <= hi_date): continue
             if data_date in seen_dates: continue
