@@ -642,6 +642,11 @@ def main():
     ms_range = mysetup_sum(by_date, d_start, d_end)
     ms_month = mysetup_sum(by_date, m_start, d_end)
 
+    missing = [d for d in (d_start + timedelta(days=i) for i in range((d_end - d_start).days + 1))
+               if d.isoformat() not in by_date]
+    if missing:
+        print(f"⚠️  Mysetup 信件缺漏：{', '.join(fmt(d) for d in missing)} 沒收到 Personal Setup 信，提交率會偏低")
+
     # ── 組裝 Excel（4 分頁）──
     wb = Workbook()
     wb.remove(wb.active)
