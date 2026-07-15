@@ -204,10 +204,10 @@ def write_block(ws, title, dataset, start):
     return trow
 
 
-def write_emp_sheet(ws, people):
-    """個人兌換清單：一列一位人員，欄為各品項。"""
+def write_emp_sheet(ws, people, region, fill):
+    """個人兌換清單（單一區）：一列一位人員，欄為各品項。"""
     names = {c: n for c, n in STORES}
-    ws.cell(1, 1, f"各門市人員兌換清單（RPOSN，{START_DATE} ~ {END_DATE}）").font = TITLE
+    ws.cell(1, 1, f"{region}人員兌換清單（RPOSN，{START_DATE} ~ {END_DATE}）").font = TITLE
     h = 2
     for i, t in enumerate(["門市", "員工代碼", "姓名"]):
         c = ws.cell(h, 1 + i, t)
@@ -218,7 +218,7 @@ def write_emp_sheet(ws, people):
         c = ws.cell(h, 4 + i, f"{nm}\n{pt}點")
         c.font = Font(bold=True, size=9)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        c.fill = N1FILL
+        c.fill = fill
     tcol = 4 + len(ITEMS)
     ws.cell(h, tcol, "合計").font = HDR
     ws.cell(h, tcol).fill = HFILL
@@ -231,7 +231,7 @@ def write_emp_sheet(ws, people):
         ws.cell(row, 1, names.get(loc, loc)).alignment = CENTER
         ws.cell(row, 2, emp).alignment = CENTER
         ws.cell(row, 3, nm)
-        ws.cell(row, 1).fill = N1FILL if list(names).index(loc) < N1_COUNT else N2FILL
+        ws.cell(row, 1).fill = fill
         for i, (stk, _, _) in enumerate(ITEMS):
             v = d.get(stk)
             ws.cell(row, 4 + i, v if v else None).alignment = CENTER
@@ -272,7 +272,11 @@ def build_excel(redeem, stock, people):
     ws.column_dimensions[get_column_letter(TOTAL_COL)].width = 8
     ws.freeze_panes = "C3"
 
-    write_emp_sheet(wb.create_sheet("個人兌換清單"), people)
+    n1_locs = {c for c, _ in STORES[:N1_COUNT]}
+    write_emp_sheet(wb.create_sheet("個人兌換清單-北一"),
+                    [p for p in people if p[0] in n1_locs], "北一區", N1FILL)
+    write_emp_sheet(wb.create_sheet("個人兌換清單-北二"),
+                    [p for p in people if p[0] not in n1_locs], "北二區", N2FILL)
 
     OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
     out = OUTPUT_BASE / f"PQI點數兌換追蹤_{START_DATE.replace('-','')}-{END_DATE.replace('-','')}.xlsx"
