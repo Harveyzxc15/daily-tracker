@@ -112,6 +112,32 @@ def query_data():
     return redeem, stock
 
 
+def query_emp():
+    """個人兌換明細：回傳 [(門市碼, 員工代碼, 姓名, {stk_id: 數量}), ...]"""
+    codes = ",".join(f"'{c}'" for c, _, _ in ITEMS)
+    locs = ",".join(f"'{c}'" for c, _ in STORES)
+    rows = run_sql(
+        f"SELECT d.loc_id, d.emp_id, "
+        f"(SELECT MAX(e.name) FROM ep_emp e WHERE e.emp_id=d.emp_id) nm, "
+        f"d.stk_id, SUM(d.stk_qty) qty FROM storedtl d "
+        f"WHERE d.src_code='RPOSN' AND d.stk_id IN ({codes}) "
+        f"AND d.doc_date >= TO_DATE('{START_DATE}','YYYY-MM-DD') "
+        f"AND d.doc_date <= TO_DATE('{END_DATE}','YYYY-MM-DD') "
+        f"AND d.loc_id IN ({locs}) "
+        f"GROUP BY d.loc_id, d.emp_id, d.stk_id")
+
+    people = {}
+    for r in rows:
+        key = (r["LOC_ID"], r["EMP_ID"], r.get("NM") or "")
+        people.setdefault(key, {})[r["STK_ID"]] = abs(int(float(r["QTY"])))
+
+    order = {c: i for i, (c, _) in enumerate(STORES)}
+    out = [(loc, emp, nm, d) for (loc, emp, nm), d in people.items()]
+    # 依門市順序排，店內再依兌換總數由多到少
+    out.sort(key=lambda x: (order.get(x[0], 99), -sum(x[3].values()), x[1]))
+    return out
+
+
 # ── Excel 樣式 ──────────────────────────────────────────────────────
 HDR = Font(bold=True, color="FFFFFF")
 HFILL = PatternFill("solid", fgColor="305496")
@@ -178,7 +204,61 @@ def write_block(ws, title, dataset, start):
     return trow
 
 
-def build_excel(redeem, stock):
+def write_emp_sheet(ws, people):
+    """個人兌換清單：一列一位人員，欄為各品項。"""
+    names = {c: n for c, n in STORES}
+    ws.cell(1, 1, f"各門市人員兌換清單（RPOSN，{START_DATE} ~ {END_DATE}）").font = TITLE
+    h = 2
+    for i, t in enumerate(["門市", "員工代碼", "姓名"]):
+        c = ws.cell(h, 1 + i, t)
+        c.font = HDR
+        c.fill = HFILL
+        c.alignment = CENTER
+    for i, (_, nm, pt) in enumerate(ITEMS):
+        c = ws.cell(h, 4 + i, f"{nm}\n{pt}點")
+        c.font = Font(bold=True, size=9)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.fill = N1FILL
+    tcol = 4 + len(ITEMS)
+    ws.cell(h, tcol, "合計").font = HDR
+    ws.cell(h, tcol).fill = HFILL
+    ws.cell(h, tcol).alignment = CENTER
+    ws.row_dimensions[h].height = 58
+
+    first = h + 1
+    for r, (loc, emp, nm, d) in enumerate(people):
+        row = first + r
+        ws.cell(row, 1, names.get(loc, loc)).alignment = CENTER
+        ws.cell(row, 2, emp).alignment = CENTER
+        ws.cell(row, 3, nm)
+        ws.cell(row, 1).fill = N1FILL if list(names).index(loc) < N1_COUNT else N2FILL
+        for i, (stk, _, _) in enumerate(ITEMS):
+            v = d.get(stk)
+            ws.cell(row, 4 + i, v if v else None).alignment = CENTER
+        f, l = get_column_letter(4), get_column_letter(3 + len(ITEMS))
+        ws.cell(row, tcol, f"=SUM({f}{row}:{l}{row})").alignment = CENTER
+        ws.cell(row, tcol).font = Font(bold=True)
+
+    trow = first + len(people)
+    ws.cell(trow, 1, "合計").font = Font(bold=True)
+    for i in range(len(ITEMS) + 1):
+        col = get_column_letter(4 + i)
+        ws.cell(trow, 4 + i, f"=SUM({col}{first}:{col}{trow - 1})").font = Font(bold=True)
+        ws.cell(trow, 4 + i).alignment = CENTER
+
+    for rr in range(h, trow + 1):
+        for cc in range(1, tcol + 1):
+            ws.cell(rr, cc).border = BORDER
+    ws.column_dimensions["A"].width = 11
+    ws.column_dimensions["B"].width = 10
+    ws.column_dimensions["C"].width = 10
+    for i in range(len(ITEMS)):
+        ws.column_dimensions[get_column_letter(4 + i)].width = 11
+    ws.column_dimensions[get_column_letter(tcol)].width = 8
+    ws.freeze_panes = "D3"
+
+
+def build_excel(redeem, stock, people):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "PQI點數兌換追蹤"
@@ -192,6 +272,8 @@ def build_excel(redeem, stock):
     ws.column_dimensions[get_column_letter(TOTAL_COL)].width = 8
     ws.freeze_panes = "C3"
 
+    write_emp_sheet(wb.create_sheet("個人兌換清單"), people)
+
     OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
     out = OUTPUT_BASE / f"PQI點數兌換追蹤_{START_DATE.replace('-','')}-{END_DATE.replace('-','')}.xlsx"
     wb.save(out)
@@ -201,7 +283,9 @@ def build_excel(redeem, stock):
 def main():
     print(f"查詢 {START_DATE} ~ {END_DATE} …")
     redeem, stock = query_data()
-    out = build_excel(redeem, stock)
+    people = query_emp()
+    print(f"人員 {len(people)} 位")
+    out = build_excel(redeem, stock, people)
     print("已輸出：", out)
     subprocess.run(["open", str(out)])
 
