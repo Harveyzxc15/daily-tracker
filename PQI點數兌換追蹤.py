@@ -68,6 +68,9 @@ STORES = [
 ]
 N1_COUNT = 6
 
+# 個人清單要排除的非真人帳號（SA999=總公司）
+EXCLUDE_EMPS = ["SA999"]
+
 
 def run_sql(sql, max_rows=2000):
     """執行 EPB 查詢，回傳 list[dict]（首列為欄名）。"""
@@ -113,27 +116,40 @@ def query_data():
 
 
 def query_emp():
-    """個人兌換明細：回傳 [(門市碼, 員工代碼, 姓名, {stk_id: 數量}), ...]"""
+    """個人兌換明細：回傳 [(門市碼, 員工代碼, 姓名, {stk_id: 數量}), ...]
+
+    名冊＝當期在該店有「銷售(POSN)」或「兌換(RPOSN)」紀錄的人員之聯集，
+    因此沒兌換的人也會在清單裡（各品項空白、合計 0）。
+    """
     codes = ",".join(f"'{c}'" for c, _, _ in ITEMS)
     locs = ",".join(f"'{c}'" for c, _ in STORES)
-    rows = run_sql(
-        f"SELECT d.loc_id, d.emp_id, "
-        f"(SELECT MAX(e.name) FROM ep_emp e WHERE e.emp_id=d.emp_id) nm, "
-        f"d.stk_id, SUM(d.stk_qty) qty FROM storedtl d "
-        f"WHERE d.src_code='RPOSN' AND d.stk_id IN ({codes}) "
-        f"AND d.doc_date >= TO_DATE('{START_DATE}','YYYY-MM-DD') "
-        f"AND d.doc_date <= TO_DATE('{END_DATE}','YYYY-MM-DD') "
-        f"AND d.loc_id IN ({locs}) "
-        f"GROUP BY d.loc_id, d.emp_id, d.stk_id")
+    period = (f"d.doc_date >= TO_DATE('{START_DATE}','YYYY-MM-DD') "
+              f"AND d.doc_date <= TO_DATE('{END_DATE}','YYYY-MM-DD')")
+    excl = ",".join(f"'{e}'" for e in EXCLUDE_EMPS)
 
-    people = {}
+    # 名冊：當期有銷售或兌換紀錄的門市人員
+    roster = run_sql(
+        f"SELECT DISTINCT d.loc_id, d.emp_id, "
+        f"(SELECT MAX(e.name) FROM ep_emp e WHERE e.emp_id=d.emp_id) nm "
+        f"FROM storedtl d WHERE d.src_code IN ('POSN','RPOSN') AND {period} "
+        f"AND d.loc_id IN ({locs}) AND d.emp_id IS NOT NULL "
+        f"AND d.emp_id NOT IN ({excl})")
+
+    # 兌換明細
+    rows = run_sql(
+        f"SELECT d.loc_id, d.emp_id, d.stk_id, SUM(d.stk_qty) qty FROM storedtl d "
+        f"WHERE d.src_code='RPOSN' AND d.stk_id IN ({codes}) AND {period} "
+        f"AND d.loc_id IN ({locs}) GROUP BY d.loc_id, d.emp_id, d.stk_id")
+
+    people = {(r["LOC_ID"], r["EMP_ID"], r.get("NM") or ""): {} for r in roster}
+    names = {(r["LOC_ID"], r["EMP_ID"]): r.get("NM") or "" for r in roster}
     for r in rows:
-        key = (r["LOC_ID"], r["EMP_ID"], r.get("NM") or "")
+        key = (r["LOC_ID"], r["EMP_ID"], names.get((r["LOC_ID"], r["EMP_ID"]), ""))
         people.setdefault(key, {})[r["STK_ID"]] = abs(int(float(r["QTY"])))
 
     order = {c: i for i, (c, _) in enumerate(STORES)}
     out = [(loc, emp, nm, d) for (loc, emp, nm), d in people.items()]
-    # 依門市順序排，店內再依兌換總數由多到少
+    # 依門市順序排，店內再依兌換總數由多到少（未兌換者自然排在該店最後）
     out.sort(key=lambda x: (order.get(x[0], 99), -sum(x[3].values()), x[1]))
     return out
 
@@ -143,6 +159,7 @@ HDR = Font(bold=True, color="FFFFFF")
 HFILL = PatternFill("solid", fgColor="305496")
 N1FILL = PatternFill("solid", fgColor="DDEBF7")
 N2FILL = PatternFill("solid", fgColor="FCE4D6")
+ZEROFILL = PatternFill("solid", fgColor="FFC7CE")   # 未兌換人員整列標色
 TITLE = Font(bold=True, size=12)
 CENTER = Alignment(horizontal="center", vertical="center")
 _THIN = Side(style="thin", color="BFBFBF")
@@ -207,7 +224,9 @@ def write_block(ws, title, dataset, start):
 def write_emp_sheet(ws, people, region, fill):
     """個人兌換清單（單一區）：一列一位人員，欄為各品項。"""
     names = {c: n for c, n in STORES}
-    ws.cell(1, 1, f"{region}人員兌換清單（RPOSN，{START_DATE} ~ {END_DATE}）").font = TITLE
+    nzero = sum(1 for p in people if sum(p[3].values()) == 0)
+    ws.cell(1, 1, f"{region}人員兌換清單（RPOSN，{START_DATE} ~ {END_DATE}）　"
+                  f"共 {len(people)} 人，其中 {nzero} 人未兌換（紅底）").font = TITLE
     h = 2
     for i, t in enumerate(["門市", "員工代碼", "姓名"]):
         c = ws.cell(h, 1 + i, t)
@@ -228,6 +247,7 @@ def write_emp_sheet(ws, people, region, fill):
     first = h + 1
     for r, (loc, emp, nm, d) in enumerate(people):
         row = first + r
+        zero = sum(d.values()) == 0          # 當期完全沒兌換
         ws.cell(row, 1, names.get(loc, loc)).alignment = CENTER
         ws.cell(row, 2, emp).alignment = CENTER
         ws.cell(row, 3, nm)
@@ -238,6 +258,9 @@ def write_emp_sheet(ws, people, region, fill):
         f, l = get_column_letter(4), get_column_letter(3 + len(ITEMS))
         ws.cell(row, tcol, f"=SUM({f}{row}:{l}{row})").alignment = CENTER
         ws.cell(row, tcol).font = Font(bold=True)
+        if zero:                              # 未兌換整列標紅底
+            for cc in range(1, tcol + 1):
+                ws.cell(row, cc).fill = ZEROFILL
 
     trow = first + len(people)
     ws.cell(trow, 1, "合計").font = Font(bold=True)
