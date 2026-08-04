@@ -135,7 +135,7 @@ def query_period(cfg, d_start, d_end):
     air = defaultdict(int)
     for r in epb(f"SELECT l.shop_id, {QTY} FROM poslinev_bi l "
                  f"WHERE l.org_id='01' AND l.shop_id IN ({si}) AND {cond} "
-                 f"AND l.cat2_id<>'2029' AND l.cat6_id IN ('6258','6312','6330') AND l.cat3_id='3002' "
+                 f"AND l.cat2_id<>'2029' AND l.cat4_id='4014' AND l.cat6_id<>'6070' AND l.cat3_id='3002' "
                  f"GROUP BY l.shop_id"):
         try:
             air[str(int(r['SHOP_ID']))] += int(float(r.get('UNITS', 0) or 0))
