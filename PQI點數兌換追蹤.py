@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# TOOL: PQI點數兌換追蹤（北一＋北二）
 """
 PQI點數兌換追蹤 — 北一＋北二區
 
@@ -25,9 +26,9 @@ from openpyxl.utils import get_column_letter
 # ═══════════════════════════════════════════════════════════════════
 #  ★★★ 兌換查詢的日期區間 ★★★
 #  ‧ 從選單列點「指定區間…」會用對話框輸入，蓋過下面這兩個。
-#  ‧ 直接跑腳本（沒帶參數）時，就用下面這兩個。
-START_DATE = "2026-06-01"   # 起（含）
-END_DATE   = "2026-06-20"   # 迄（含）
+#  ‧ 直接跑腳本（沒帶參數）時，預設本月 1 號～今天。
+START_DATE = date.today().replace(day=1).strftime("%Y-%m-%d")   # 起（含）
+END_DATE   = date.today().strftime("%Y-%m-%d")                  # 迄（含）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -48,25 +49,38 @@ if len(sys.argv) >= 3:
 elif len(sys.argv) == 2:                       # 只給一個 → 起迄同一天
     START_DATE = END_DATE = _norm_date(sys.argv[1])
 
-# 追蹤品項：(存貨代碼, 品名, 點數)
+# 追蹤品項：((新代碼, 舊代碼), 品名, 點數)
+# 2026-07-31 起存貨代碼由 277xxxxx 換成 106xxxxx，切換期兩碼並行 → 合併計數。
 ITEMS = [
-    ("27700462", "@PQI 6000E 輕巧行動電源-白色",            99),
-    ("27700562", "PQI 18W三合一無線立充",                  199),
-    ("27700648", "PQI WCS23WR 23W三合一磁吸無線充電座",     250),
-    ("27700651", "PQI WCS15W 15W快充磁吸折疊充電座",         99),
-    ("27700639", "PQI PD10 10000雙向快充行動電源",          299),
-    ("27700668", "PQI WCC2301 MagSafe 三合一摺疊充電座",    250),
+    (("10600491", "27700462"), "@PQI 6000E 輕巧行動電源-白色",            99),
+    (("10600495", "27700562"), "PQI 18W三合一無線立充",                  199),
+    (("10600506", "27700648"), "PQI WCS23WR 23W三合一磁吸無線充電座",     250),
+    (("10600509", "27700651"), "PQI WCS15W 15W快充磁吸折疊充電座",         99),
+    (("10600503", "27700639"), "PQI PD10 10000雙向快充行動電源",          299),
+    (("10600520", "27700668"), "PQI WCC2301 MagSafe 三合一摺疊充電座",    250),
+    (("10600528", "27700685"), "PQI iCable Multi Plug 三合一傳輸線 100cm", None),
+    (("10600526", "27700683"), "PQI iCable USB-A to Lightning 100cm-黑",  None),
+    (("10600489", "27700443"), "PQI iCable Multi-Plug 三頭編織線 180cm",  None),
 ]
+
+# 代碼 → 該品項的主代碼（新碼），用來把新舊碼併成同一列
+PRIMARY = {c: cs[0] for cs, _, _ in ITEMS for c in cs}
+ALL_CODES = list(PRIMARY)
+
+
+def _label(nm, pt):
+    return f"{nm} {pt}點" if pt else nm
 
 # 門市：(門市碼, 店名)；北一前 N1_COUNT 間、其餘北二
 STORES = [
     ("004", "士林"), ("005", "微風"), ("024", "美麗華"),
     ("046", "阿波羅"), ("054", "高島屋"), ("057", "羅東"),
+    ("110", "士林維修"), ("121", "羅東維修"),
     ("009", "永和"), ("025", "板橋誠品"), ("050", "新西門"),
     ("055", "花蓮"), ("063", "板橋遠百"), ("064", "新莊宏匯"),
-    ("068", "新店裕隆城"),
+    ("068", "新店裕隆城"), ("113", "花蓮維修"),
 ]
-N1_COUNT = 6
+N1_COUNT = 8
 
 # 個人清單要排除的非真人帳號（SA999=總公司）
 EXCLUDE_EMPS = ["SA999"]
@@ -86,7 +100,7 @@ def run_sql(sql, max_rows=2000):
 
 
 def query_data():
-    codes = ",".join(f"'{c}' " for c, _, _ in ITEMS)
+    codes = ",".join(f"'{c}' " for c in ALL_CODES)
     locs = ",".join(f"'{c}'" for c, _ in STORES)
     sa = ",".join(f"'SA{c}'" for c, _ in STORES)
 
@@ -104,14 +118,16 @@ def query_data():
         f"WHERE stk_id IN ({codes}) AND store_id IN ({sa}) "
         f"GROUP BY store_id, stk_id")
 
-    redeem = {stk: {} for stk, _, _ in ITEMS}
+    redeem = {cs[0]: {} for cs, _, _ in ITEMS}
     for r in redeem_rows:
-        redeem[r["STK_ID"]][r["LOC_ID"]] = abs(int(float(r["QTY"])))
+        d = redeem[PRIMARY[r["STK_ID"]]]
+        d[r["LOC_ID"]] = d.get(r["LOC_ID"], 0) + abs(int(float(r["QTY"])))
 
-    stock = {stk: {} for stk, _, _ in ITEMS}
+    stock = {cs[0]: {} for cs, _, _ in ITEMS}
     for r in stock_rows:
         code = r["STORE_ID"][2:]  # 去掉 'SA'
-        stock[r["STK_ID"]][code] = int(float(r["QTY"]))
+        d = stock[PRIMARY[r["STK_ID"]]]
+        d[code] = d.get(code, 0) + int(float(r["QTY"]))
     return redeem, stock
 
 
@@ -121,7 +137,7 @@ def query_emp():
     名冊＝當期在該店有「銷售(POSN)」或「兌換(RPOSN)」紀錄的人員之聯集，
     因此沒兌換的人也會在清單裡（各品項空白、合計 0）。
     """
-    codes = ",".join(f"'{c}'" for c, _, _ in ITEMS)
+    codes = ",".join(f"'{c}'" for c in ALL_CODES)
     locs = ",".join(f"'{c}'" for c, _ in STORES)
     period = (f"d.doc_date >= TO_DATE('{START_DATE}','YYYY-MM-DD') "
               f"AND d.doc_date <= TO_DATE('{END_DATE}','YYYY-MM-DD')")
@@ -145,7 +161,9 @@ def query_emp():
     names = {(r["LOC_ID"], r["EMP_ID"]): r.get("NM") or "" for r in roster}
     for r in rows:
         key = (r["LOC_ID"], r["EMP_ID"], names.get((r["LOC_ID"], r["EMP_ID"]), ""))
-        people.setdefault(key, {})[r["STK_ID"]] = abs(int(float(r["QTY"])))
+        d = people.setdefault(key, {})
+        stk = PRIMARY[r["STK_ID"]]
+        d[stk] = d.get(stk, 0) + abs(int(float(r["QTY"])))
 
     order = {c: i for i, (c, _) in enumerate(STORES)}
     out = [(loc, emp, nm, d) for (loc, emp, nm), d in people.items()]
@@ -195,12 +213,12 @@ def write_block(ws, title, dataset, start):
         cc.fill = N1FILL if i < N1_COUNT else N2FILL
     ws.cell(h2, TOTAL_COL, "").fill = HFILL
 
-    for r, (stk, nm, pt) in enumerate(ITEMS):
+    for r, (cs, nm, pt) in enumerate(ITEMS):
         row = first + r
-        ws.cell(row, 1, stk)
-        ws.cell(row, 2, f"{nm} {pt}點")
+        ws.cell(row, 1, cs[0])
+        ws.cell(row, 2, _label(nm, pt))
         for i, (code, _) in enumerate(STORES):
-            v = dataset[stk].get(code)
+            v = dataset[cs[0]].get(code)
             ws.cell(row, 3 + i, v if v is not None else None).alignment = CENTER
         f, l = get_column_letter(3), get_column_letter(2 + len(STORES))
         ws.cell(row, TOTAL_COL, f"=SUM({f}{row}:{l}{row})").alignment = CENTER
@@ -234,7 +252,7 @@ def write_emp_sheet(ws, people, region, fill):
         c.fill = HFILL
         c.alignment = CENTER
     for i, (_, nm, pt) in enumerate(ITEMS):
-        c = ws.cell(h, 4 + i, f"{nm}\n{pt}點")
+        c = ws.cell(h, 4 + i, f"{nm}\n{pt}點" if pt else nm)
         c.font = Font(bold=True, size=9)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.fill = fill
@@ -252,8 +270,8 @@ def write_emp_sheet(ws, people, region, fill):
         ws.cell(row, 2, emp).alignment = CENTER
         ws.cell(row, 3, nm)
         ws.cell(row, 1).fill = fill
-        for i, (stk, _, _) in enumerate(ITEMS):
-            v = d.get(stk)
+        for i, (cs, _, _) in enumerate(ITEMS):
+            v = d.get(cs[0])
             ws.cell(row, 4 + i, v if v else None).alignment = CENTER
         f, l = get_column_letter(4), get_column_letter(3 + len(ITEMS))
         ws.cell(row, tcol, f"=SUM({f}{row}:{l}{row})").alignment = CENTER

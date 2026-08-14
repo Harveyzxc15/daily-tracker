@@ -25,6 +25,10 @@ ST_DIR    = Path.home() / 'Desktop' / 'north2-weekly-report'
 ST_CONFIG = ST_DIR / 'local_config.json'
 
 
+class EPBError(RuntimeError):
+    """EPB 查詢失敗（連線／權限／SQL 錯誤），與「合法查到零筆」區分開。"""
+
+
 def epb(sql):
     r = subprocess.run(
         [JAVA, '-Dsun.net.client.defaultReadTimeout=120000',
@@ -32,8 +36,12 @@ def epb(sql):
         capture_output=True, text=True, cwd=EPB_CWD
     )
     lines = [l for l in r.stdout.strip().split('\n') if l.strip()]
-    if not lines:
-        return []
+    # 查到零筆時仍會印出表頭，所以「完全沒有輸出」一定是查詢本身失敗，
+    # 不可當成 0 —— 否則年累積之類的數字會靜靜變成 0 而看不出異常。
+    if r.returncode != 0 or not lines:
+        err = (r.stderr or '').strip().splitlines()
+        raise EPBError(f"EPB 查詢失敗 (rc={r.returncode})："
+                       f"{err[0] if err else '無錯誤訊息（EPB 可能未連線／未開 VPN）'}")
     hdrs = [h.strip().upper() for h in lines[0].split('\t')]
     return [dict(zip(hdrs, row.split('\t'))) for row in lines[1:]]
 
@@ -149,36 +157,47 @@ def main():
     # ── ARpedia 銷售 ──
     print("\n【ARpedia 銷售數量】")
     results = []
-    for label, ds, de in ar_periods:
-        print(f"  查詢 {label}...", flush=True)
-        results.append((label, query_units(ds, de)))
+    try:
+        for label, ds, de in ar_periods:
+            print(f"  查詢 {label}...", flush=True)
+            results.append((label, query_units(ds, de)))
+    except EPBError as e:
+        print(f"\n  ⚠️  {e}")
+        print("  ⚠️  ARpedia 銷售數量無法取得，本段跳過（不列出數字，以免 0 被誤讀為實際銷售）")
+        results = []
 
-    col_w  = 10
-    header = f"{'門市':<7}" + "".join(f"{label:>{col_w}}" for label, _ in results)
-    print("\n" + header)
-    print("-" * len(header))
-    totals = [0] * len(results)
-    for store in STORES:
-        sid = SHOP_CODES[store]
-        row = f"{store:<7}"
-        for i, (_, data) in enumerate(results):
-            v = data.get(sid, 0)
-            totals[i] += v
-            row += f"{v:>{col_w},}"
-        print(row)
-    print("-" * len(header))
-    print(f"{'合計':<7}" + "".join(f"{t:>{col_w},}" for t in totals))
+    if results:
+        col_w  = 10
+        header = f"{'門市':<7}" + "".join(f"{label:>{col_w}}" for label, _ in results)
+        print("\n" + header)
+        print("-" * len(header))
+        totals = [0] * len(results)
+        for store in STORES:
+            sid = SHOP_CODES[store]
+            row = f"{store:<7}"
+            for i, (_, data) in enumerate(results):
+                v = data.get(sid, 0)
+                totals[i] += v
+                row += f"{v:>{col_w},}"
+            print(row)
+        print("-" * len(header))
+        print(f"{'合計':<7}" + "".join(f"{t:>{col_w},}" for t in totals))
 
     # ── 人流（來客數）──
     print("\n【人流（來客數）】")
     tr_data = fetch_shoppertrak(tr_periods)
     for label, ds, de in tr_periods:           # 無計數器 3 店：每期間一次合併查詢
         print(f"  查詢無計數器門市成交筆數 {label}...", flush=True)
-        cnts = query_txn_counts(ds, de)
+        try:
+            cnts = query_txn_counts(ds, de)
+        except EPBError as e:
+            print(f"  ⚠️  {e}")
+            cnts = None
         for store in STORES:
             code = SHOP_STR[store]
             if code in NO_COUNTER:
-                tr_data.setdefault(store, []).append(traffic_formula(cnts.get(code, 0)))
+                tr_data.setdefault(store, []).append(
+                    None if cnts is None else traffic_formula(cnts.get(code, 0)))
 
     col_w2  = 16
     tr_labels = [label for label, _, _ in tr_periods]

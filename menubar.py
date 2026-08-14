@@ -91,13 +91,16 @@ class DailyTrackerApp(rumps.App):
                 continue
 
             # 報表類：自動 / 指定區間
-            icon = "📱" if "ARpedia" in tool_name else "🛡️"
+            icon = ("📱" if "ARpedia" in tool_name
+                    else "🎁" if "PQI" in tool_name else "🛡️")
             item = rumps.MenuItem(f"{icon}  {tool_name}")
             # 只有「每日追蹤主機」有輸出檔可顯示上次執行（合併版輸出在 北一北二/）
             if "每日追蹤主機" in tool_name:
                 item.add(rumps.MenuItem(f"上次執行：{last_run('每日追蹤主機_*.xlsx', '北一北二')}"))
                 item.add(None)
-            item.add(rumps.MenuItem("自動（最近完整週）",
+            auto_label = ("自動（本月 1 號～今天）" if "PQI" in tool_name
+                          else "自動（最近完整週）")
+            item.add(rumps.MenuItem(auto_label,
                                     callback=lambda _, s=script_path: run_report(s)))
             item.add(rumps.MenuItem("指定區間…",
                                     callback=lambda _, s=script_path, n=tool_name: self._custom(s, n)))
