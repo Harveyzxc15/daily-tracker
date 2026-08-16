@@ -222,9 +222,11 @@ def main():
     # ── 門市日報 本日銷售/休假人數（北二區，來自各店日報信附件）──
     try:
         sys.path.insert(0, str(Path(__file__).parent))
-        from headcount_lib import print_headcount
+        from headcount_lib import print_headcount, print_traffic_compare
         print("=" * 80)
-        print_headcount('北二區')
+        reports, target = print_headcount('北二區')
+        print()
+        print_traffic_compare(reports, target, yesterday, tr_data, '北二區')
         print()
     except Exception as e:
         print(f"\n  ⚠️  門市人數統計失敗：{e}")
