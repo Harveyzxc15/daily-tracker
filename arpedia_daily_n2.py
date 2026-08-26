@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOOL: ARpedia、人流 日報（北二區）
+# TOOL: 日報數據（北二區）
 """
 ARpedia 日報 — 北二區（永和、板橋誠品、西門、花蓮、板橋遠百、新莊宏匯、新店裕隆城）
 輸出：ARpedia（昨日/本週/月累/年累） + 人流（昨日/月累/上月同期）
@@ -151,7 +151,7 @@ def main():
         (f"上月同期 {last_month_start.strftime('%-m/%-d')}~{last_month_same.strftime('%-m/%-d')}", last_month_start, last_month_same),
     ]
 
-    print(f"\nARpedia、人流 日報 北二區 ({today.strftime('%Y-%m-%d')})")
+    print(f"\n日報數據 北二區 ({today.strftime('%Y-%m-%d')})")
     print("=" * 80)
 
     # ── ARpedia 銷售 ──
