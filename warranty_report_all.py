@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import FormulaRule
 from config import JAVA, EPB_CP, EPB_CWD, MAIL_BASE, OUTPUT_BASE
 
 # 同時併發的 EPB 查詢數（過高可能讓 EPB 伺服器吃力，4 為穩妥值）
@@ -384,6 +385,24 @@ def sc(ws, r, c, val=None, bg=None, fg='000000', bold=False, sz=10):
     cell.border = BORD
     return cell
 
+def rate_formula(H, A):
+    return f'=IF({H}>0,N({A})/{H},"—")'
+
+def gap_formula(H, A, tgt):
+    need = f'CEILING(ROUND({H}*{tgt}/100,6),1)-N({A})'
+    return f'=IF({H}<=0,"—",IF(MAX(0,{need})=0,"達標",MAX(0,{need})))'
+
+def add_rate_cf(ws, r1, r2, col, tgt):
+    """搭售率欄：低於目標紅字（隨數字自動變色）、無資料灰字"""
+    L = get_column_letter(col); c = f'{L}{r1}'
+    ws.conditional_formatting.add(f'{L}{r1}:{L}{r2}', FormulaRule(formula=[f'ISTEXT({c})'], font=Font(color='AAAAAA'), stopIfTrue=True))
+    ws.conditional_formatting.add(f'{L}{r1}:{L}{r2}', FormulaRule(formula=[f'{c}<{tgt}/100'], font=Font(color='C00000')))
+
+def add_gap_cf(ws, r1, r2, col):
+    L = get_column_letter(col+0); c = f'{L}{r1}'
+    ws.conditional_formatting.add(f'{L}{r1}:{L}{r2}', FormulaRule(formula=[f'{c}="—"'], font=Font(color='AAAAAA'), stopIfTrue=True))
+    ws.conditional_formatting.add(f'{L}{r1}:{L}{r2}', FormulaRule(formula=[f'ISNUMBER({c})'], font=Font(color='C00000')))
+
 def write_table(ws, start_row, title, data, cfg, extras=None, mysetup=None):
     stores      = cfg['stores']
     ms_part     = cfg['mysetup_part']
@@ -432,24 +451,13 @@ def write_table(ws, start_row, title, data, cfg, extras=None, mysetup=None):
         col = 2
         for cat, label, hbg, sbg, tgt in CATS:
             host, sa_, acpp_ = data[store][cat]
-            w   = acpp_
-            pct = w / host * 100 if host > 0 else None
-            ps  = f'{pct:.0f}%' if pct is not None else '—'
-            txt = ('C00000' if pct is not None and pct < tgt else '375623' if pct is not None else 'AAAAAA')
-            # 缺口 = 達標所需搭售數(主機×目標%，無條件進位) − 現有搭售數
-            need = (host * tgt + 99) // 100 if host > 0 else 0
-            gap  = max(0, need - w)
-            if host <= 0:
-                gtxt, gfg = '—', 'AAAAAA'
-            elif gap == 0:
-                gtxt, gfg = '達標', '375623'
-            else:
-                gtxt, gfg = gap, 'C00000'
+            # 搭售率＝ACPP+/台數（排除 SACare）；缺口＝⌈台數×目標%⌉−ACPP+，皆為 Excel 公式
             sc(ws, r, col,     host if host > 0 else 0,     bg=bg)
             sc(ws, r, col + 1, acpp_ if acpp_ != 0 else '', bg=bg)
             sc(ws, r, col + 2, sa_   if sa_   != 0 else '', bg=bg)
-            sc(ws, r, col + 3, ps, bg=bg, fg=txt, bold=True)
-            sc(ws, r, col + 4, gtxt, bg=bg, fg=gfg, bold=True)
+            H_, A_ = f'{get_column_letter(col)}{r}', f'{get_column_letter(col+1)}{r}'
+            sc(ws, r, col + 3, rate_formula(H_, A_), bg=bg, fg='375623', bold=True).number_format = '0%'
+            sc(ws, r, col + 4, gap_formula(H_, A_, tgt), bg=bg, fg='375623', bold=True)
             col += 5
         if extras:
             sc(ws, r, col,     extras[store]['arpedia'] or '', bg=bg)
@@ -472,19 +480,15 @@ def write_table(ws, start_row, title, data, cfg, extras=None, mysetup=None):
     sc(ws, r_tot, 1, '合計', bg='404040', fg='FFFFFF', bold=True)
     col = 2
     for cat, label, hbg, sbg, tgt in CATS:
-        t_h = sum(data[s][cat][0] for s in stores)
-        t_w = sum(data[s][cat][2] for s in stores)
-        pct = t_w / t_h * 100 if t_h > 0 else None
-        ps  = f'{pct:.0f}%' if pct is not None else '—'
-        txt = ('C00000' if pct is not None and pct < tgt else '375623' if pct is not None else 'AAAAAA')
-        t_need = (t_h * tgt + 99) // 100 if t_h > 0 else 0
-        t_gap  = max(0, t_need - t_w)
-        gtxt, gfg = ('—', 'AAAAAA') if t_h <= 0 else (('達標', '375623') if t_gap == 0 else (t_gap, 'C00000'))
-        sc(ws, r_tot, col,     t_h, bg='D9D9D9', bold=True)
-        sc(ws, r_tot, col + 1, sum(data[s][cat][2] for s in stores) or '', bg='D9D9D9', bold=True)
-        sc(ws, r_tot, col + 2, sum(data[s][cat][1] for s in stores), bg='D9D9D9', bold=True)
-        sc(ws, r_tot, col + 3, ps, fg=txt, bg='D9D9D9', bold=True)
-        sc(ws, r_tot, col + 4, gtxt, fg=gfg, bg='D9D9D9', bold=True)
+        r1, r2 = start_row + 3, r_tot - 1
+        for k in range(3):
+            Lk = get_column_letter(col + k)
+            sc(ws, r_tot, col + k, f'=SUM({Lk}{r1}:{Lk}{r2})', bg='D9D9D9', bold=True)
+        H_, A_ = f'{get_column_letter(col)}{r_tot}', f'{get_column_letter(col+1)}{r_tot}'
+        sc(ws, r_tot, col + 3, rate_formula(H_, A_), fg='375623', bg='D9D9D9', bold=True).number_format = '0%'
+        sc(ws, r_tot, col + 4, gap_formula(H_, A_, tgt), fg='375623', bg='D9D9D9', bold=True)
+        add_rate_cf(ws, r1, r_tot, col + 3, tgt)
+        add_gap_cf(ws, r1, r_tot, col + 4)
         col += 5
     if extras:
         sc(ws, r_tot, col,     sum(extras[s]['arpedia'] for s in stores), bg='D9D9D9', bold=True)
