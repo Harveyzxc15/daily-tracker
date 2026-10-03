@@ -432,7 +432,7 @@ def write_table(ws, start_row, title, data, cfg, extras=None, mysetup=None):
         col = 2
         for cat, label, hbg, sbg, tgt in CATS:
             host, sa_, acpp_ = data[store][cat]
-            w   = sa_ + acpp_
+            w   = acpp_
             pct = w / host * 100 if host > 0 else None
             ps  = f'{pct:.0f}%' if pct is not None else '—'
             txt = ('C00000' if pct is not None and pct < tgt else '375623' if pct is not None else 'AAAAAA')
@@ -473,7 +473,7 @@ def write_table(ws, start_row, title, data, cfg, extras=None, mysetup=None):
     col = 2
     for cat, label, hbg, sbg, tgt in CATS:
         t_h = sum(data[s][cat][0] for s in stores)
-        t_w = sum(data[s][cat][1] + data[s][cat][2] for s in stores)
+        t_w = sum(data[s][cat][2] for s in stores)
         pct = t_w / t_h * 100 if t_h > 0 else None
         ps  = f'{pct:.0f}%' if pct is not None else '—'
         txt = ('C00000' if pct is not None and pct < tgt else '375623' if pct is not None else 'AAAAAA')
@@ -650,7 +650,7 @@ def main():
     # ── 組裝 Excel（4 分頁）──
     wb = Workbook()
     wb.remove(wb.active)
-    NOTE = '※ 主機台數已排除認證機（類別2=2029）'
+    NOTE = '※ 主機台數已排除認證機（類別2=2029）　※ 搭售率已排除 SACare（現行 SACare 皆為檢測新機），僅計 ACPP+'
     for rname, cfg in REGIONS.items():
         short = rname[:2]
         dr  = results[('period', rname, 'range')]
