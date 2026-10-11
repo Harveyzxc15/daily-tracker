@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.studioa.resv-pickup-watch</string>
+<key>ProgramArguments</key><array><string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string><string>/Users/bob.1469/工具中心/scripts/預約取貨核對_監看.py</string></array>
+<key>EnvironmentVariables</key><dict><key>SSL_CERT_FILE</key><string>/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem</string><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
+<key>StartInterval</key><integer>1800</integer>
+<key>StandardOutPath</key><string>/tmp/resv-pickup-watch.log</string>
+<key>StandardErrorPath</key><string>/tmp/resv-pickup-watch.log</string>
+</dict></plist>
