@@ -282,30 +282,79 @@ def _save_cache(cache):
     except Exception:
         pass
 
+MYSETUP_SENDER = 'guestbook_support@group.apple.com'
+
+def _mysetup_mail_paths(lo_date):
+    """回傳 Personal Setup 信的 emlx 路徑（依收信時間排序）。
+    不能用 emlx 檔案 mtime 篩：Mail 重新同步會把舊信 mtime 改成同步當下（2026-10-19 實測）。
+    優先查 Mail 的 Envelope Index（收信時間 date_received、寄件者），ROWID 即 emlx 檔名；
+    查不到時退回掃全部 emlx（只用 mtime 下限，同步只會讓 mtime 變新）。"""
+    all_files = glob.glob(os.path.join(str(MAIL_BASE), '**/Messages/*.emlx'), recursive=True)
+    by_id = {}
+    for f in all_files:
+        rid = os.path.basename(f).split('.')[0]
+        if rid not in by_id or not f.endswith('.partial.emlx'):   # 完整檔優先於 .partial
+            by_id[rid] = f
+    lo_ts = _dt(lo_date.year, lo_date.month, lo_date.day).timestamp() - 86400
+    idx = MAIL_BASE / 'MailData' / 'Envelope Index'
+    if idx.exists():
+        import sqlite3, tempfile, shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            # 複製到暫存檔再開（含 WAL），避免鎖到 Mail 正在用的資料庫
+            for suffix in ('', '-wal', '-shm'):
+                src = str(idx) + suffix
+                if os.path.exists(src):
+                    shutil.copy2(src, os.path.join(tmp, 'ei' + suffix))
+            con = sqlite3.connect(os.path.join(tmp, 'ei'))
+            rows = con.execute(
+                "SELECT m.ROWID FROM messages m JOIN addresses a ON m.sender = a.ROWID "
+                "WHERE a.address = ? AND m.deleted = 0 AND m.date_received >= ? ORDER BY m.date_received",
+                (MYSETUP_SENDER, lo_ts)).fetchall()
+            con.close()
+            return [by_id[str(r[0])] for r in rows if str(r[0]) in by_id]
+        except Exception:
+            pass
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return [f for f in by_id.values() if os.path.getmtime(f) >= lo_ts]
+
+def _mysetup_xlsx_blobs(msg, path):
+    """信件內的 .xlsx 附件 bytes；.partial.emlx 的附件另存在同層 Attachments/{ROWID}/。"""
+    for part in msg.walk():
+        fn = _decode_mail_str(part.get_filename() or '')
+        if fn.lower().endswith('.xlsx'):
+            raw_xls = part.get_payload(decode=True)
+            if raw_xls:
+                yield raw_xls
+    if path.endswith('.partial.emlx'):
+        rid = os.path.basename(path).split('.')[0]
+        att_dir = os.path.join(os.path.dirname(os.path.dirname(path)), 'Attachments', rid)
+        for f in sorted(glob.glob(os.path.join(att_dir, '**', '*.xlsx'), recursive=True)):
+            with open(f, 'rb') as fh:
+                yield fh.read()
+
 def scan_mysetup(kw_map, lo_date, hi_date):
     """掃 Apple Mail 抓 Personal Setup 提交數，一次涵蓋 lo~hi 的所有 setup 日期。
     回傳 {date_iso: {store: count}}，由 mysetup_sum() 推導各期間（避免重複掃描）。
     純 Python CPU 工作（會佔 GIL），主程式以獨立 process 執行使其與 EPB 查詢併行。
     已定案日期（SETTLE_DAYS 天前）的提交數從本機快取讀取，省下 xlsx 載入。
+    快取一天一筆 {'stores': [...], 'counts': {...}}：只帶單區 kw_map 的呼叫只讀不縮，
+    店名集合不同時合併，不會把兩區合併的資料覆寫成單區。
     """
     cache = _load_cache()
     settle_before = date.today() - timedelta(days=SETTLE_DAYS)
-
-    emlx_files = glob.glob(os.path.join(str(MAIL_BASE), '**/Messages/*.emlx'), recursive=True)
-    emlx_files = [f for f in emlx_files if not f.endswith('.partial.emlx')]
-    lo = _dt(lo_date.year, lo_date.month, lo_date.day).timestamp() - 86400
-    hi = _dt(hi_date.year, hi_date.month, hi_date.day).timestamp() + 86400 * 2
-    emlx_files = [f for f in emlx_files if lo <= os.path.getmtime(f) <= hi]
+    want = set(kw_map)
 
     by_date = {}
     seen_dates = set()
-    for path in emlx_files:
+    for path in _mysetup_mail_paths(lo_date):
         try:
             # 快速預篩：先讀檔頭，原始 bytes 不含關鍵字就跳過（省下對數千封非候選信的 MIME parse）
             # 用寄件者過濾（中文標題會被 MIME 編碼，raw bytes 找不到 'Setup Data'）
             with open(path, 'rb') as f:
                 raw = f.read(32768)
-                if b'guestbook_support@group.apple.com' not in raw:
+                if MYSETUP_SENDER.encode() not in raw:
                     continue
                 raw += f.read()  # 候選信才補讀完整內容（attachment 需要）
             if b'\n' not in raw: continue
@@ -317,18 +366,17 @@ def scan_mysetup(kw_map, lo_date, hi_date):
             data_date = _subject_date(subj)
             if data_date is None or not (lo_date <= data_date <= hi_date): continue
             if data_date in seen_dates: continue
-            seen_dates.add(data_date)
             diso = data_date.isoformat()
-            # 已定案 + 已快取 → 直接用，跳過昂貴的 xlsx 載入
-            if data_date < settle_before and diso in cache:
-                by_date[diso] = cache[diso]
+            # 已定案 + 快取涵蓋所需店名 → 直接用，跳過昂貴的 xlsx 載入
+            ent = cache.get(diso)
+            if (data_date < settle_before and isinstance(ent, dict)
+                    and want <= set(ent.get('stores', []))):
+                seen_dates.add(data_date)
+                by_date[diso] = {k: v for k, v in ent['counts'].items() if k in want}
                 continue
             counts = defaultdict(int)
-            for part in msg.walk():
-                fn = _decode_mail_str(part.get_filename() or '')
-                if not fn.lower().endswith('.xlsx'): continue
-                raw_xls = part.get_payload(decode=True)
-                if not raw_xls: continue
+            found = False
+            for raw_xls in _mysetup_xlsx_blobs(msg, path):
                 with warnings.catch_warnings():
                     warnings.simplefilter('ignore')
                     mwb = load_workbook(io.BytesIO(raw_xls), read_only=True, data_only=True)
@@ -350,15 +398,25 @@ def scan_mysetup(kw_map, lo_date, hi_date):
                                 counts[store] += 1
                                 break
                 mwb.close()
+                found = True
                 break
+            if not found: continue   # 附件還沒下載完 → 換同日期的另一封重寄信
+            seen_dates.add(data_date)
             by_date[diso] = dict(counts)
         except Exception:
             continue
 
     # 回寫快取：只存已定案日期（最近未定案的日期每次重掃，避免漏後到的資料）
     for diso, counts in by_date.items():
-        if date.fromisoformat(diso) < settle_before:
-            cache[diso] = counts
+        if date.fromisoformat(diso) >= settle_before:
+            continue
+        ent = cache.get(diso)
+        old_stores = set(ent.get('stores', [])) if isinstance(ent, dict) and 'counts' in ent else set()
+        if want <= old_stores:
+            continue   # 既有快取已涵蓋（例如兩區合併），不覆寫
+        merged = dict(ent['counts']) if old_stores else {}
+        merged.update(counts)
+        cache[diso] = {'stores': sorted(old_stores | want), 'counts': merged}
     _save_cache(cache)
     return by_date
 
