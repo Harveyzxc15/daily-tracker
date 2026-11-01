@@ -231,6 +231,17 @@ def main():
     except Exception as e:
         print(f"\n  ⚠️  門市人數統計失敗：{e}")
 
+    # ── 北二區日報信：Demo＋ARpedia＋區內盤點差異（可開 Mail 草稿）──
+    try:
+        from inventory_diff import print_region_block
+        from headcount_lib import CODES
+        print("=" * 80)
+        print_region_block(reports, target, yesterday,
+                           totals if results else None, CODES['北二區'], '北二區')
+        print()
+    except Exception as e:
+        print(f"\n  ⚠️  日報信內文產生失敗：{e}")
+
 
 if __name__ == '__main__':
     main()
